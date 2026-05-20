@@ -1295,7 +1295,8 @@ async def wiki_comment_delete(
         await _invalidate_page_cache(page_id=normalized_page_id)
     return result
 
-mcp.tool(
+
+@mcp.tool(
     tags={"write", "wiki"},
     timeout=60.0,
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
