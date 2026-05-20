@@ -911,6 +911,39 @@ async def wiki_page_clone(
     timeout=60.0,
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
 )
+async def wiki_page_grids_list(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    order_by: str | None = Field(default=None, description="Поле сортировки: title или created_at"),
+    order_direction: str | None = Field(default=None, description="Направление сортировки: asc или desc"),
+    page_size: int = Field(default=25, ge=1, le=50, description="Размер страницы (1-50)"),
+) -> dict:
+    """Read-only: список динамических таблиц, прикрепленных к странице."""
+    normalized_page_id = _normalize_page_id(page_id)
+    await ctx.info(f"Получаю список grid для страницы ID={normalized_page_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "cursor": cursor,
+            "order_by": order_by,
+            "order_direction": order_direction,
+            "page_size": page_size,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}/grids",
+        params=params,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
 async def wiki_page_descendants(
     page_id: Annotated[int, Field(description="Числовой ID страницы")],
     ctx: Context,
