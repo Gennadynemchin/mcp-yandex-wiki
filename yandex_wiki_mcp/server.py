@@ -1005,6 +1005,35 @@ async def wiki_page_descendants_by_slug(
         http_client=http_client,
     )
 
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_page_recover(
+    recovery_token: Annotated[str, Field(description="Токен восстановления (recovery_token) из ответа wiki_page_delete")],
+    ctx: Context,
+) -> dict:
+    """Write: восстановить страницу, удалённую через wiki_page_delete, по recovery_token."""
+    _assert_write_enabled("wiki_page_recover")
+    normalized_token = _normalize_required_str(recovery_token, "recovery_token")
+    await ctx.info(f"Восстанавливаю страницу по токену {normalized_token!r}")
+
+    http_client = _get_http_client(ctx)
+    result = await _request(
+        method="POST",
+        path=f"/recovery_tokens/{normalized_token}/recover",
+        http_client=http_client,
+    )
+    if not _is_error_result(result):
+        await _invalidate_page_cache(
+            page_id=_extract_page_id(result),
+            slug=_extract_page_slug(result),
+        )
+    return result
+
+
 @mcp.tool(
     tags={"read", "wiki"},
     timeout=60.0,
@@ -1133,6 +1162,8 @@ async def wiki_page_resources_list(
         params=params,
         http_client=http_client,
     )
+
+
 @mcp.tool(
     tags={"read", "wiki"},
     timeout=60.0,
