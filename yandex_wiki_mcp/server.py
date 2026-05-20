@@ -904,6 +904,73 @@ async def wiki_page_clone(
         body=body,
         http_client=http_client,
     )
+
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_page_descendants(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    actuality: str | None = Field(default=None, description="Фильтр актуальности: actual или obsolete"),
+    include_self: bool = Field(default=False, description="Включать саму страницу в результат"),
+    page_size: int = Field(default=50, ge=1, le=100, description="Размер страницы (1-100)"),
+) -> dict:
+    """Read-only: получить все подстраницы (на любом уровне) указанной страницы по ID."""
+    normalized_page_id = _normalize_page_id(page_id)
+    await ctx.info(f"Получаю подстраницы для ID={normalized_page_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "cursor": cursor,
+            "actuality": actuality,
+            "include_self": _bool_param(include_self),
+            "page_size": page_size,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}/descendants",
+        params=params,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_page_descendants_by_slug(
+    slug: Annotated[str, Field(description="Путь страницы без домена")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    actuality: str | None = Field(default=None, description="Фильтр актуальности: actual или obsolete"),
+    include_self: bool = Field(default=False, description="Включать саму страницу в результат"),
+    page_size: int = Field(default=50, ge=1, le=100, description="Размер страницы (1-100)"),
+) -> dict:
+    """Read-only: получить подстраницы по slug страницы."""
+    normalized_slug = _normalize_slug(_normalize_required_str(slug, "slug"))
+    await ctx.info(f"Получаю подстраницы для slug={normalized_slug}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "slug": normalized_slug,
+            "cursor": cursor,
+            "actuality": actuality,
+            "include_self": _bool_param(include_self),
+            "page_size": page_size,
+        }
+    )
+    return await _request(
+        method="GET",
+        path="/pages/descendants",
+        params=params,
+        http_client=http_client,
+    )
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
