@@ -971,6 +971,98 @@ async def wiki_page_descendants_by_slug(
         params=params,
         http_client=http_client,
     )
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_attachments_list(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    order_by: str | None = Field(default=None, description="Поле сортировки: name, size или created_at"),
+    order_direction: str | None = Field(default=None, description="Направление сортировки: asc или desc"),
+    page_size: int = Field(default=50, ge=1, le=100, description="Размер страницы (1-100)"),
+) -> dict:
+    """Read-only: список вложений (файлов), прикреплённых к странице."""
+    normalized_page_id = _normalize_page_id(page_id)
+    await ctx.info(f"Получаю вложения страницы ID={normalized_page_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "cursor": cursor,
+            "order_by": order_by,
+            "order_direction": order_direction,
+            "page_size": page_size,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}/attachments",
+        params=params,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_attachment_attach(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    upload_sessions: Annotated[list[str], Field(description="Список ID завершённых upload-сессий, файлы которых нужно прикрепить")],
+    ctx: Context,
+) -> dict:
+    """Write: прикрепить к странице файлы из завершённых upload-сессий."""
+    await ctx.info(f"Прикрепляю файлы к странице ID={page_id}")
+    _assert_write_enabled("wiki_attachment_attach")
+    normalized_page_id = _normalize_page_id(page_id)
+
+    if not upload_sessions or not isinstance(upload_sessions, list):
+        raise ToolError("Параметр upload_sessions должен содержать хотя бы один session_id.")
+    cleaned_sessions: list[str] = []
+    for session in upload_sessions:
+        cleaned = _normalize_required_str(session, "upload_sessions[*]")
+        cleaned_sessions.append(cleaned)
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/pages/{normalized_page_id}/attachments",
+        body={"upload_sessions": cleaned_sessions},
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
+async def wiki_attachment_delete(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    file_id: Annotated[int, Field(description="Числовой ID файла-вложения")],
+    ctx: Context,
+) -> dict:
+    """Write: удалить вложение по ID файла со страницы."""
+    await ctx.info(f"Удаляю вложение file_id={file_id} со страницы ID={page_id}")
+    _assert_write_enabled("wiki_attachment_delete")
+    normalized_page_id = _normalize_page_id(page_id)
+    try:
+        normalized_file_id = int(file_id)
+    except (TypeError, ValueError):
+        raise ToolError("Параметр file_id должен быть целым числом.")
+    if normalized_file_id <= 0:
+        raise ToolError("Параметр file_id должен быть положительным целым числом.")
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="DELETE",
+        path=f"/pages/{normalized_page_id}/attachments/{normalized_file_id}",
+        http_client=http_client,
+    )
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
