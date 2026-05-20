@@ -1194,6 +1194,422 @@ async def wiki_comment_delete(
     if not _is_error_result(result):
         await _invalidate_page_cache(page_id=normalized_page_id)
     return result
+
+mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_create(
+    title: Annotated[str, Field(description="Заголовок новой динамической таблицы (1-255 символов)")],
+    ctx: Context,
+    page_id: int | None = Field(default=None, description="ID страницы, к которой будет привязана таблица"),
+    page_slug: str | None = Field(default=None, description="Slug страницы (используется если page_id не задан)"),
+) -> dict:
+    """Write: создать новую динамическую таблицу (grid) как ресурс страницы."""
+    await ctx.info(f"Создаю динамическую таблицу title={title!r}")
+    _assert_write_enabled("wiki_grid_create")
+
+    normalized_title = _normalize_required_str(title, "title")
+    if len(normalized_title) > 255:
+        raise ToolError("Параметр title должен быть не длиннее 255 символов.")
+
+    if page_id is None and not (page_slug or "").strip():
+        raise ToolError("Нужно указать page_id или page_slug.")
+
+    page_identity: dict[str, Any] = {}
+    if page_id is not None:
+        page_identity["id"] = _normalize_page_id(page_id)
+    if page_slug:
+        normalized_slug = _normalize_slug(page_slug)
+        if normalized_slug:
+            page_identity["slug"] = normalized_slug
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path="/grids",
+        body={"title": normalized_title, "page": page_identity},
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_grid_get(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    ctx: Context,
+    fields: str | None = Field(default=None, description="Дополнительные поля через запятую (attributes, user_permissions, ...)"),
+    filter: str | None = Field(default=None, description="Фильтр строк, например '[slug] ~ wiki AND [slug2]<32'"),
+    only_cols: str | None = Field(default=None, description="Слаги колонок через запятую — возвращать только их"),
+    only_rows: str | None = Field(default=None, description="ID строк через запятую — возвращать только их"),
+    revision: int | None = Field(default=None, description="Загрузить старую ревизию таблицы"),
+    sort: str | None = Field(default=None, description="Сортировка строк по колонкам, например 'slug, -slug2, slug3'"),
+) -> dict:
+    """Read-only: получить динамическую таблицу со структурой и строками."""
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    await ctx.info(f"Получаю grid ID={normalized_grid_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "fields": fields,
+            "filter": filter,
+            "only_cols": only_cols,
+            "only_rows": only_rows,
+            "revision": revision,
+            "sort": sort,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/grids/{normalized_grid_id}",
+        params=params,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_update(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы (для оптимистической блокировки)")],
+    ctx: Context,
+    title: str | None = Field(default=None, description="Новый заголовок таблицы (1-255 символов)"),
+    default_sort: list[dict] | None = Field(default=None, description="Сортировка по умолчанию: список объектов {slug, direction}"),
+) -> dict:
+    """Write: обновить мета-данные динамической таблицы (заголовок и/или сортировку по умолчанию)."""
+    await ctx.info(f"Обновляю grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_update")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+
+    body: dict[str, Any] = {"revision": normalized_revision}
+    if title is not None:
+        stripped_title = title.strip()
+        if not stripped_title:
+            raise ToolError("Если title передан, он не должен быть пустым.")
+        if len(stripped_title) > 255:
+            raise ToolError("Параметр title должен быть не длиннее 255 символов.")
+        body["title"] = stripped_title
+    if default_sort is not None:
+        body["default_sort"] = default_sort
+
+    if len(body) == 1:
+        raise ToolError("Нужно передать хотя бы одно поле для обновления: title или default_sort.")
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}",
+        body=body,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
+async def wiki_grid_delete(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    ctx: Context,
+) -> dict:
+    """Write: удалить динамическую таблицу."""
+    await ctx.info(f"Удаляю grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_delete")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="DELETE",
+        path=f"/grids/{normalized_grid_id}",
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_add_rows(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    rows: Annotated[list[list[Any]], Field(description="Список строк (каждая строка — массив значений по колонкам)")],
+    ctx: Context,
+    position: int | None = Field(default=None, description="Позиция вставки (0-based индекс)"),
+    after_row_id: str | None = Field(default=None, description="ID строки, после которой вставить новые"),
+) -> dict:
+    """Write: добавить строки в динамическую таблицу. Значения колонок передаются массивами."""
+    await ctx.info(f"Добавляю {len(rows)} строк в grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_add_rows")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+
+    if not rows:
+        raise ToolError("Параметр rows должен содержать хотя бы одну строку.")
+
+    body: dict[str, Any] = {"revision": normalized_revision, "rows": rows}
+    if position is not None:
+        body["position"] = int(position)
+    if after_row_id is not None:
+        body["after_row_id"] = _normalize_required_str(after_row_id, "after_row_id")
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}/rows",
+        body=body,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
+async def wiki_grid_remove_rows(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    row_ids: Annotated[list[str], Field(description="ID строк для удаления (минимум 1)")],
+    ctx: Context,
+) -> dict:
+    """Write: удалить строки из динамической таблицы."""
+    await ctx.info(f"Удаляю строки из grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_remove_rows")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+
+    if not row_ids:
+        raise ToolError("Параметр row_ids должен содержать хотя бы один ID.")
+    cleaned_row_ids = [_normalize_required_str(row_id, "row_ids[*]") for row_id in row_ids]
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="DELETE",
+        path=f"/grids/{normalized_grid_id}/rows",
+        body={"revision": normalized_revision, "row_ids": cleaned_row_ids},
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_add_columns(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    columns: Annotated[list[dict], Field(description="Описание колонок (title, type, slug, и т.д.)")],
+    ctx: Context,
+    position: int | None = Field(default=None, description="Позиция вставки колонок"),
+) -> dict:
+    """Write: добавить колонки в динамическую таблицу."""
+    await ctx.info(f"Добавляю {len(columns)} колонок в grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_add_columns")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+
+    if not columns:
+        raise ToolError("Параметр columns должен содержать хотя бы одну колонку.")
+
+    body: dict[str, Any] = {"revision": normalized_revision, "columns": columns}
+    if position is not None:
+        body["position"] = int(position)
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}/columns",
+        body=body,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
+async def wiki_grid_remove_columns(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    column_slugs: Annotated[list[str], Field(description="Слаги колонок для удаления")],
+    ctx: Context,
+) -> dict:
+    """Write: удалить колонки из динамической таблицы по слагам."""
+    await ctx.info(f"Удаляю колонки из grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_remove_columns")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+
+    if not column_slugs:
+        raise ToolError("Параметр column_slugs должен содержать хотя бы один слаг.")
+    cleaned_slugs = [_normalize_required_str(slug, "column_slugs[*]") for slug in column_slugs]
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="DELETE",
+        path=f"/grids/{normalized_grid_id}/columns",
+        body={"revision": normalized_revision, "column_slugs": cleaned_slugs},
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_update_cells(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    cells: Annotated[list[dict], Field(description="Список ячеек {row_id, column_slug, value}")],
+    ctx: Context,
+) -> dict:
+    """Write: обновить значения ячеек динамической таблицы."""
+    await ctx.info(f"Обновляю {len(cells)} ячеек в grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_update_cells")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+
+    if not cells:
+        raise ToolError("Параметр cells должен содержать хотя бы одну ячейку.")
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}/cells",
+        body={"revision": normalized_revision, "cells": cells},
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_move_rows(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    row_id: Annotated[str, Field(description="ID первой переносимой строки")],
+    ctx: Context,
+    position: int | None = Field(default=None, description="Позиция назначения (0-based)"),
+    after_row_id: str | None = Field(default=None, description="ID строки, после которой разместить"),
+    rows_count: int | None = Field(default=None, description="Количество подряд идущих строк для переноса"),
+) -> dict:
+    """Write: переместить одну или несколько строк в динамической таблице."""
+    await ctx.info(f"Перемещаю строки в grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_move_rows")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+    normalized_row_id = _normalize_required_str(row_id, "row_id")
+
+    body: dict[str, Any] = {
+        "revision": normalized_revision,
+        "row_id": normalized_row_id,
+    }
+    if position is not None:
+        body["position"] = int(position)
+    if after_row_id is not None:
+        body["after_row_id"] = _normalize_required_str(after_row_id, "after_row_id")
+    if rows_count is not None:
+        body["rows_count"] = int(rows_count)
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}/rows/move",
+        body=body,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_move_columns(
+    grid_id: Annotated[str, Field(description="ID динамической таблицы")],
+    revision: Annotated[str, Field(description="Текущая ревизия таблицы")],
+    column_slug: Annotated[str, Field(description="Слаг первой переносимой колонки")],
+    ctx: Context,
+    position: int | None = Field(default=None, description="Позиция назначения (0-based)"),
+    columns_count: int | None = Field(default=None, description="Количество подряд идущих колонок для переноса"),
+) -> dict:
+    """Write: переместить одну или несколько колонок в динамической таблице."""
+    await ctx.info(f"Перемещаю колонки в grid ID={grid_id}")
+    _assert_write_enabled("wiki_grid_move_columns")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_revision = _normalize_required_str(revision, "revision")
+    normalized_column_slug = _normalize_required_str(column_slug, "column_slug")
+
+    body: dict[str, Any] = {
+        "revision": normalized_revision,
+        "column_slug": normalized_column_slug,
+    }
+    if position is not None:
+        body["position"] = int(position)
+    if columns_count is not None:
+        body["columns_count"] = int(columns_count)
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}/columns/move",
+        body=body,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_grid_clone(
+    grid_id: Annotated[str, Field(description="ID исходной динамической таблицы")],
+    target: Annotated[str, Field(description="Slug страницы назначения (создаётся, если не существует)")],
+    ctx: Context,
+    title: str | None = Field(default=None, description="Заголовок таблицы после клонирования (1-255 символов)"),
+    with_data: bool = Field(default=False, description="Клонировать вместе с данными (строками)"),
+) -> dict:
+    """Write: клонировать динамическую таблицу. Асинхронная операция — вернёт task_id для wiki_operation_clone_inline_grid_status."""
+    await ctx.info(f"Клонирую grid ID={grid_id} -> {target}")
+    _assert_write_enabled("wiki_grid_clone")
+    normalized_grid_id = _normalize_grid_id(grid_id)
+    normalized_target = _normalize_slug(_normalize_required_str(target, "target"))
+
+    body: dict[str, Any] = {
+        "target": normalized_target,
+        "with_data": bool(with_data),
+    }
+    if title is not None:
+        stripped_title = title.strip()
+        if not stripped_title:
+            raise ToolError("Если title передан, он не должен быть пустым.")
+        if len(stripped_title) > 255:
+            raise ToolError("Параметр title должен быть не длиннее 255 символов.")
+        body["title"] = stripped_title
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/grids/{normalized_grid_id}/clone",
+        body=body,
+        http_client=http_client,
+    )
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
