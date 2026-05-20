@@ -843,6 +843,30 @@ async def wiki_page_get_by_id(
         http_client=http_client,
     )
 
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+)
+async def wiki_page_delete(
+    page_id: Annotated[int, Field(description="Числовой ID страницы для удаления")],
+    ctx: Context,
+) -> dict:
+    """Write: удалить страницу по ID. В ответе возвращается recovery_token для восстановления."""
+    await ctx.info(f"Удаляю страницу ID={page_id}")
+    _assert_write_enabled("wiki_page_delete")
+    normalized_page_id = _normalize_page_id(page_id)
+
+    http_client = _get_http_client(ctx)
+    result = await _request(
+        method="DELETE",
+        path=f"/pages/{normalized_page_id}",
+        http_client=http_client,
+    )
+    if not _is_error_result(result):
+        await _invalidate_page_cache(page_id=normalized_page_id)
+    return result
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
