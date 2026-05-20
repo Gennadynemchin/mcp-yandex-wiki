@@ -1064,6 +1064,42 @@ async def wiki_attachment_delete(
         http_client=http_client,
     )
 
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_page_resources_list(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    order_by: str | None = Field(default=None, description="Поле сортировки: name_title или created_at"),
+    order_direction: str | None = Field(default=None, description="Направление сортировки: asc или desc"),
+    page_size: int = Field(default=50, ge=1, le=100, description="Размер страницы (1-100)"),
+    q: str | None = Field(default=None, description="Поиск по заголовку (макс. 255 символов)"),
+    types: str | None = Field(default=None, description="Типы ресурсов через запятую: attachment, grid"),
+) -> dict:
+    """Read-only: получить список ресурсов страницы (attachment, grid и пр.)."""
+    normalized_page_id = _normalize_page_id(page_id)
+    await ctx.info(f"Получаю ресурсы страницы ID={normalized_page_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "cursor": cursor,
+            "order_by": order_by,
+            "order_direction": order_direction,
+            "page_size": page_size,
+            "q": q,
+            "types": types,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}/resources",
+        params=params,
+        http_client=http_client,
+    )
 @mcp.tool(
     tags={"read", "wiki"},
     timeout=60.0,
@@ -1610,6 +1646,8 @@ async def wiki_grid_clone(
         body=body,
         http_client=http_client,
     )
+
+
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
