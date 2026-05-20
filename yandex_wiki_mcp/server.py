@@ -867,6 +867,43 @@ async def wiki_page_delete(
     if not _is_error_result(result):
         await _invalidate_page_cache(page_id=normalized_page_id)
     return result
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_page_clone(
+    page_id: Annotated[int, Field(description="Числовой ID исходной страницы")],
+    target: Annotated[str, Field(description="Slug новой страницы (адрес после клонирования)")],
+    ctx: Context,
+    title: str | None = Field(default=None, description="Если задан — заголовок новой страницы"),
+    subscribe_me: bool = Field(default=False, description="Подписаться на изменения новой страницы"),
+) -> dict:
+    """Write: клонировать страницу по новому адресу. Асинхронная операция: возвращается task_id для wiki_operation_clone_status."""
+    await ctx.info(f"Клонирую страницу ID={page_id} -> {target}")
+    _assert_write_enabled("wiki_page_clone")
+    normalized_page_id = _normalize_page_id(page_id)
+    normalized_target = _normalize_slug(_normalize_required_str(target, "target"))
+
+    body: dict[str, Any] = {
+        "target": normalized_target,
+        "subscribe_me": bool(subscribe_me),
+    }
+    if title is not None:
+        stripped_title = title.strip()
+        if not stripped_title:
+            raise ToolError("Если title передан, он не должен быть пустым.")
+        body["title"] = stripped_title
+
+    http_client = _get_http_client(ctx)
+    return await _request(
+        method="POST",
+        path=f"/pages/{normalized_page_id}/clone",
+        body=body,
+        http_client=http_client,
+    )
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
