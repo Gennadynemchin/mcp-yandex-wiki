@@ -813,6 +813,36 @@ async def wiki_page_append_content(
     return result
 
 
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_page_get_by_id(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    ctx: Context,
+    fields: str = Field(default=DEFAULT_FIELDS, description="Поля через запятую: content, attributes, breadcrumbs, redirect"),
+    raise_on_redirect: bool = Field(default=False, description="Вернуть ошибку при редиректе вместо автоматического перехода"),
+    revision_id: int | None = Field(default=None, description="ID конкретной ревизии страницы"),
+) -> dict:
+    """Read-only: получить страницу по числовому ID."""
+    normalized_page_id = _normalize_page_id(page_id)
+    await ctx.info(f"Запрашиваю страницу по ID: {normalized_page_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "fields": _normalize_fields(fields),
+            "raise_on_redirect": _bool_param(raise_on_redirect),
+            "revision_id": revision_id,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}",
+        params=params,
+        http_client=http_client,
+    )
+
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
