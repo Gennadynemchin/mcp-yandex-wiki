@@ -1063,6 +1063,137 @@ async def wiki_attachment_delete(
         path=f"/pages/{normalized_page_id}/attachments/{normalized_file_id}",
         http_client=http_client,
     )
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_comments_list(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    order_by: str | None = Field(default=None, description="Поле сортировки (поддерживается только created_at)"),
+    order_direction: str | None = Field(default=None, description="Направление сортировки: asc или desc"),
+    page_size: int = Field(default=50, ge=1, le=100, description="Размер страницы (1-100)"),
+    status_filter: str | None = Field(default=None, description="Фильтр по статусу: resolved или unresolved"),
+) -> dict:
+    """Read-only: список комментариев страницы (треды верхнего уровня)."""
+    normalized_page_id = _normalize_page_id(page_id)
+    await ctx.info(f"Получаю комментарии страницы ID={normalized_page_id}")
+    http_client = _get_http_client(ctx)
+    params = _drop_none(
+        {
+            "cursor": cursor,
+            "order_by": order_by,
+            "order_direction": order_direction,
+            "page_size": page_size,
+            "status_filter": status_filter,
+        }
+    )
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}/comments",
+        params=params,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+async def wiki_comment_create(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    body: Annotated[str, Field(description="Текст комментария")],
+    ctx: Context,
+    inline_text: str | None = Field(default=None, description="Текст, к которому привязан inline-комментарий"),
+    parent_id: int | None = Field(default=None, description="ID комментария-родителя (для ответа)"),
+    thread_id: int | None = Field(default=None, description="ID треда комментария"),
+) -> dict:
+    """Write: создать комментарий на странице (или ответ в треде)."""
+    await ctx.info(f"Создаю комментарий на странице ID={page_id}")
+    _assert_write_enabled("wiki_comment_create")
+    normalized_page_id = _normalize_page_id(page_id)
+    normalized_body = _normalize_required_str(body, "body")
+
+    request_body: dict[str, Any] = {"body": normalized_body}
+    if inline_text is not None:
+        request_body["inline_text"] = inline_text
+    if parent_id is not None:
+        request_body["parent_id"] = int(parent_id)
+    if thread_id is not None:
+        request_body["thread_id"] = int(thread_id)
+
+    http_client = _get_http_client(ctx)
+    result = await _request(
+        method="POST",
+        path=f"/pages/{normalized_page_id}/comments",
+        body=request_body,
+        http_client=http_client,
+    )
+    if not _is_error_result(result):
+        await _invalidate_page_cache(page_id=normalized_page_id)
+    return result
+
+
+@mcp.tool(
+    tags={"read", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+async def wiki_comment_thread(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    comment_id: Annotated[int, Field(description="ID корневого комментария треда")],
+    ctx: Context,
+    cursor: str | None = Field(default=None, description="Курсор пагинации"),
+    page_size: int = Field(default=25, ge=1, le=50, description="Размер страницы (1-50)"),
+) -> dict:
+    """Read-only: получить комментарии в треде по его корневому комментарию."""
+    normalized_page_id = _normalize_page_id(page_id)
+    normalized_comment_id = int(comment_id)
+    if normalized_comment_id <= 0:
+        raise ToolError("Параметр comment_id должен быть положительным целым числом.")
+
+    await ctx.info(f"Получаю тред комментария ID={normalized_comment_id} (page_id={normalized_page_id})")
+    http_client = _get_http_client(ctx)
+    params = _drop_none({"cursor": cursor, "page_size": page_size})
+    return await _request(
+        method="GET",
+        path=f"/pages/{normalized_page_id}/comments/{normalized_comment_id}/thread",
+        params=params,
+        http_client=http_client,
+    )
+
+
+@mcp.tool(
+    tags={"write", "wiki"},
+    timeout=60.0,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
+async def wiki_comment_delete(
+    page_id: Annotated[int, Field(description="Числовой ID страницы")],
+    comment_id: Annotated[int, Field(description="ID комментария для удаления")],
+    ctx: Context,
+) -> dict:
+    """Write: удалить комментарий со страницы."""
+    await ctx.info(f"Удаляю комментарий ID={comment_id} (page_id={page_id})")
+    _assert_write_enabled("wiki_comment_delete")
+    normalized_page_id = _normalize_page_id(page_id)
+    normalized_comment_id = int(comment_id)
+    if normalized_comment_id <= 0:
+        raise ToolError("Параметр comment_id должен быть положительным целым числом.")
+
+    http_client = _get_http_client(ctx)
+    result = await _request(
+        method="DELETE",
+        path=f"/pages/{normalized_page_id}/comments/{normalized_comment_id}",
+        http_client=http_client,
+    )
+    if not _is_error_result(result):
+        await _invalidate_page_cache(page_id=normalized_page_id)
+    return result
 def _build_parser(default_transport: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Yandex Wiki MCP server (read/write + readonly mode).",
