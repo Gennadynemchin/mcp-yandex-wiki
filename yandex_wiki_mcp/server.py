@@ -143,6 +143,32 @@ def _normalize_page_id(page_id: int) -> int:
     return normalized
 
 
+def _normalize_grid_id(grid_id: str) -> str:
+    if grid_id is None:
+        raise ToolError("Параметр grid_id не должен быть пустым.")
+    normalized = str(grid_id).strip()
+    if not normalized:
+        raise ToolError("Параметр grid_id не должен быть пустым.")
+    return normalized
+
+
+def _normalize_required_str(value: Any, param_name: str) -> str:
+    if value is None:
+        raise ToolError(f"Параметр {param_name} не должен быть пустым.")
+    normalized = str(value).strip()
+    if not normalized:
+        raise ToolError(f"Параметр {param_name} не должен быть пустым.")
+    return normalized
+
+
+def _bool_param(value: bool) -> str:
+    return str(bool(value)).lower()
+
+
+def _drop_none(params: dict) -> dict:
+    return {key: value for key, value in params.items() if value is not None}
+
+
 def _assert_write_enabled(tool_name: str):
     if SERVER_READONLY:
         raise ToolError(f"Инструмент '{tool_name}' отключен: сервер запущен в режиме readonly.")
