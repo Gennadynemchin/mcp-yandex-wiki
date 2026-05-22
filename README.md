@@ -43,10 +43,30 @@
 
 ### Кэширование (Redis)
 
-Кэшируются только read-операции для Wiki:
-- `wiki_page_get`
+Кэшируются read-операции для Wiki:
 - `wiki_page_get_by_url`
+- `wiki_page_get`
 - `wiki_page_get_text_by_url`
+- `wiki_page_resolve_id`
+- `wiki_page_get_by_id`
+- `wiki_page_grids_list`
+- `wiki_page_descendants`
+- `wiki_page_descendants_by_slug`
+- `wiki_attachments_list`
+- `wiki_page_resources_list`
+- `wiki_comments_list`
+- `wiki_comment_thread`
+- `wiki_grid_get`
+
+Какие write-операции используют кэш:
+- `wiki_page_create`
+- `wiki_page_update`
+- `wiki_page_append_content`
+- `wiki_page_delete`
+- `wiki_page_recover`
+- `wiki_comment_create`
+- `wiki_comment_delete`
+
 
 Особенности:
 - включается через `TOOLS_CACHE_ENABLED=true`
